@@ -1,11 +1,15 @@
-
+import { useState } from "react";
 import { University } from "@/types/university";
 import { StudentProfile } from "@/types/student";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
-import { Star, MapPin, Users, TrendingUp, DollarSign, GraduationCap } from "lucide-react";
+import { Star, MapPin, Users, TrendingUp, DollarSign, GraduationCap, Heart } from "lucide-react";
+import { UniversityDetailModal } from "./UniversityDetailModal";
+import { UniversityComparison } from "./UniversityComparison";
+import { useFavorites } from "@/hooks/useFavorites";
+import { toast } from "@/hooks/use-toast";
 
 interface UniversityRecommendationsProps {
   universities: University[];
@@ -18,6 +22,13 @@ export const UniversityRecommendations = ({
   studentProfile, 
   country 
 }: UniversityRecommendationsProps) => {
+  const [selectedUniversity, setSelectedUniversity] = useState<University | null>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [comparisonUniversities, setComparisonUniversities] = useState<University[]>([]);
+  const [isComparisonOpen, setIsComparisonOpen] = useState(false);
+  
+  const { favorites, addToFavorites, isFavorite, toggleFavorite } = useFavorites();
+
   const formatCurrency = (amount: number, currency: string) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -34,12 +45,87 @@ export const UniversityRecommendations = ({
     return "text-orange-600 bg-orange-100";
   };
 
+  const handleViewDetails = (university: University) => {
+    setSelectedUniversity(university);
+    setIsDetailModalOpen(true);
+  };
+
+  const handleAddToFavorites = (university: University) => {
+    addToFavorites(university);
+    toast({
+      title: "Added to Favorites",
+      description: `${university.name} has been added to your favorites.`,
+    });
+  };
+
+  const handleAddToComparison = (university: University) => {
+    setComparisonUniversities(prev => {
+      const isAlreadyInComparison = prev.some(uni => uni.id === university.id);
+      if (isAlreadyInComparison) {
+        toast({
+          title: "Already in Comparison",
+          description: `${university.name} is already in your comparison list.`,
+          variant: "destructive"
+        });
+        return prev;
+      }
+      
+      if (prev.length >= 4) {
+        toast({
+          title: "Comparison Limit Reached",
+          description: "You can compare up to 4 universities at once.",
+          variant: "destructive"
+        });
+        return prev;
+      }
+      
+      toast({
+        title: "Added to Comparison",
+        description: `${university.name} has been added to comparison.`,
+      });
+      return [...prev, university];
+    });
+  };
+
+  const handleRemoveFromComparison = (universityId: string) => {
+    setComparisonUniversities(prev => prev.filter(uni => uni.id !== universityId));
+  };
+
+  const handleOpenComparison = () => {
+    if (comparisonUniversities.length === 0) {
+      toast({
+        title: "No Universities to Compare",
+        description: "Add universities to comparison first.",
+        variant: "destructive"
+      });
+      return;
+    }
+    setIsComparisonOpen(true);
+  };
+
   return (
     <div className="space-y-6">
-      <div className="text-center mb-6">
-        <p className="text-lg text-gray-600">
-          Found <strong>{universities.length}</strong> universities in <strong>{country}</strong> that match your profile
-        </p>
+      <div className="flex justify-between items-center">
+        <div>
+          <p className="text-lg text-gray-600">
+            Found <strong>{universities.length}</strong> universities in <strong>{country}</strong> that match your profile
+          </p>
+          {favorites.length > 0 && (
+            <p className="text-sm text-gray-500 mt-1">
+              You have {favorites.length} favorite{favorites.length === 1 ? '' : 's'}
+            </p>
+          )}
+        </div>
+        
+        {comparisonUniversities.length > 0 && (
+          <Button 
+            variant="outline" 
+            onClick={handleOpenComparison}
+            className="flex items-center gap-2"
+          >
+            Compare ({comparisonUniversities.length})
+          </Button>
+        )}
       </div>
 
       <div className="grid gap-6">
@@ -53,6 +139,9 @@ export const UniversityRecommendations = ({
                       {index + 1}
                     </span>
                     {university.name}
+                    {isFavorite(university.id) && (
+                      <Heart className="w-5 h-5 fill-red-500 text-red-500" />
+                    )}
                   </CardTitle>
                   <div className="flex items-center gap-4 text-sm text-gray-600">
                     <span className="flex items-center gap-1">
@@ -164,14 +253,26 @@ export const UniversityRecommendations = ({
               )}
 
               <div className="flex gap-2 pt-4 border-t">
-                <Button variant="outline" size="sm">
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => handleViewDetails(university)}
+                >
                   View Details
                 </Button>
-                <Button variant="outline" size="sm">
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => handleAddToComparison(university)}
+                >
                   Compare
                 </Button>
-                <Button size="sm">
-                  Add to Favorites
+                <Button 
+                  size="sm"
+                  onClick={() => handleAddToFavorites(university)}
+                  variant={isFavorite(university.id) ? "default" : "outline"}
+                >
+                  {isFavorite(university.id) ? "Favorited" : "Add to Favorites"}
                 </Button>
               </div>
             </CardContent>
@@ -184,6 +285,22 @@ export const UniversityRecommendations = ({
           View More Universities
         </Button>
       </div>
+
+      {/* Modals */}
+      <UniversityDetailModal
+        university={selectedUniversity}
+        isOpen={isDetailModalOpen}
+        onClose={() => setIsDetailModalOpen(false)}
+        onAddToFavorites={handleAddToFavorites}
+        onCompare={handleAddToComparison}
+      />
+
+      <UniversityComparison
+        universities={comparisonUniversities}
+        isOpen={isComparisonOpen}
+        onClose={() => setIsComparisonOpen(false)}
+        onRemoveFromComparison={handleRemoveFromComparison}
+      />
     </div>
   );
 };

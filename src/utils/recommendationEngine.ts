@@ -1,4 +1,3 @@
-
 import { StudentProfile } from "@/types/student";
 import { University } from "@/types/university";
 import { mockUniversityData } from "@/data/mockUniversities";
@@ -11,9 +10,44 @@ export const getUniversityRecommendations = async (
   await new Promise(resolve => setTimeout(resolve, 1500));
   
   // Get universities for the selected country
-  const countryUniversities = mockUniversityData.filter(
+  let countryUniversities = mockUniversityData.filter(
     uni => uni.country === country
   );
+
+  // Apply strict filtering based on user profile
+  countryUniversities = countryUniversities.filter(university => {
+    // Filter by budget - exclude universities that are too expensive
+    const totalCost = university.tuitionFee.international + university.livingCost.medium;
+    if (profile.annualBudget && totalCost > profile.annualBudget * 1.3) {
+      return false;
+    }
+
+    // Filter by academic requirements - exclude if user doesn't meet minimum requirements
+    const normalizedGPA = normalizeGPA(profile.gpa || 0, profile.gradeSystem);
+    if (normalizedGPA < university.minGPA * 0.85) {
+      return false;
+    }
+
+    // Filter by language requirements
+    if (profile.ielts && university.ieltsMin && profile.ielts < university.ieltsMin - 0.5) {
+      return false;
+    }
+
+    if (profile.toefl && university.toeflMin && profile.toefl < university.toeflMin - 10) {
+      return false;
+    }
+
+    // Filter by field of study - prioritize universities strong in user's field
+    if (profile.fieldOfStudy) {
+      const hasRelevantProgram = university.strongDepartments.some(dept => 
+        dept.toLowerCase().includes(profile.fieldOfStudy.toLowerCase()) ||
+        profile.fieldOfStudy.toLowerCase().includes(dept.toLowerCase())
+      );
+      // Don't exclude completely, but will affect scoring
+    }
+
+    return true;
+  });
   
   // Calculate match scores for each university
   const scoredUniversities = countryUniversities.map(university => {
@@ -27,74 +61,95 @@ export const getUniversityRecommendations = async (
     };
   });
   
-  // Sort by match score and return top matches
-  return scoredUniversities
-    .sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0))
-    .slice(0, 10);
+  // Sort by match score and return varied results based on profile
+  const sortedUniversities = scoredUniversities
+    .sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));
+
+  // Return different numbers based on match quality
+  const highQualityMatches = sortedUniversities.filter(uni => (uni.matchScore || 0) >= 80);
+  if (highQualityMatches.length >= 5) {
+    return highQualityMatches.slice(0, 8);
+  } else {
+    return sortedUniversities.slice(0, 10);
+  }
 };
 
 const calculateMatchScore = (university: University, profile: StudentProfile): number => {
-  let score = 0;
-  let maxScore = 0;
+  let totalScore = 0;
+  let maxPossibleScore = 0;
   
-  // Academic compatibility (40% weight)
-  const academicWeight = 40;
-  if (profile.gpa) {
-    const gpaScore = calculateGPAScore(university, profile);
-    score += gpaScore * academicWeight / 100;
-    maxScore += academicWeight;
-  }
+  // Academic compatibility (35% weight)
+  const academicWeight = 35;
+  const gpaScore = calculateGPAScore(university, profile);
+  totalScore += gpaScore * academicWeight / 100;
+  maxPossibleScore += academicWeight;
   
-  // Financial compatibility (25% weight)
-  const financialWeight = 25;
-  if (profile.annualBudget) {
-    const financialScore = calculateFinancialScore(university, profile);
-    score += financialScore * financialWeight / 100;
-    maxScore += financialWeight;
-  }
+  // Financial compatibility (30% weight) - more important now
+  const financialWeight = 30;
+  const financialScore = calculateFinancialScore(university, profile);
+  totalScore += financialScore * financialWeight / 100;
+  maxPossibleScore += financialWeight;
   
-  // Test scores compatibility (15% weight)
-  const testScoreWeight = 15;
+  // Field of study match (15% weight)
+  const fieldWeight = 15;
+  const fieldScore = calculateFieldMatch(university, profile);
+  totalScore += fieldScore * fieldWeight / 100;
+  maxPossibleScore += fieldWeight;
+  
+  // Test scores compatibility (10% weight)
+  const testScoreWeight = 10;
   const testScore = calculateTestScoreCompatibility(university, profile);
-  score += testScore * testScoreWeight / 100;
-  maxScore += testScoreWeight;
+  totalScore += testScore * testScoreWeight / 100;
+  maxPossibleScore += testScoreWeight;
   
   // Preferences compatibility (10% weight)
   const preferencesWeight = 10;
   const preferencesScore = calculatePreferencesScore(university, profile);
-  score += preferencesScore * preferencesWeight / 100;
-  maxScore += preferencesWeight;
+  totalScore += preferencesScore * preferencesWeight / 100;
+  maxPossibleScore += preferencesWeight;
   
-  // Career opportunities (10% weight)
-  const careerWeight = 10;
-  const careerScore = calculateCareerScore(university, profile);
-  score += careerScore * careerWeight / 100;
-  maxScore += careerWeight;
+  return Math.round((totalScore / maxPossibleScore) * 100);
+};
+
+const calculateFieldMatch = (university: University, profile: StudentProfile): number => {
+  if (!profile.fieldOfStudy) return 70; // neutral score
   
-  return Math.round((score / maxScore) * 100);
+  const fieldLower = profile.fieldOfStudy.toLowerCase();
+  const strongMatch = university.strongDepartments.some(dept => 
+    dept.toLowerCase().includes(fieldLower) || fieldLower.includes(dept.toLowerCase())
+  );
+  
+  const programMatch = university.programs.some(program => 
+    program.toLowerCase().includes(fieldLower) || fieldLower.includes(program.toLowerCase())
+  );
+  
+  if (strongMatch) return 100;
+  if (programMatch) return 80;
+  return 40; // weak match
 };
 
 const calculateGPAScore = (university: University, profile: StudentProfile): number => {
-  const studentGPA = normalizeGPA(profile.gpa, profile.gradeSystem);
+  const studentGPA = normalizeGPA(profile.gpa || 0, profile.gradeSystem);
   
-  if (studentGPA >= university.avgGPA) return 100;
-  if (studentGPA >= university.minGPA) {
-    const range = university.avgGPA - university.minGPA;
-    const position = studentGPA - university.minGPA;
-    return 70 + (position / range) * 30;
-  }
+  if (studentGPA >= university.avgGPA + 0.2) return 100;
+  if (studentGPA >= university.avgGPA) return 90;
+  if (studentGPA >= university.minGPA + 0.2) return 80;
+  if (studentGPA >= university.minGPA) return 70;
   if (studentGPA >= university.minGPA * 0.9) return 50;
-  return 20;
+  return 25;
 };
 
 const calculateFinancialScore = (university: University, profile: StudentProfile): number => {
-  const totalCost = university.tuitionFee.international + university.livingCost.medium;
-  const budget = profile.annualBudget;
+  if (!profile.annualBudget) return 50;
   
-  if (budget >= totalCost * 1.2) return 100;
-  if (budget >= totalCost) return 80;
-  if (budget >= totalCost * 0.8) return 60;
-  if (budget >= totalCost * 0.6) return 40;
+  const totalCost = university.tuitionFee.international + university.livingCost.medium;
+  const budgetRatio = profile.annualBudget / totalCost;
+  
+  if (budgetRatio >= 1.5) return 100;
+  if (budgetRatio >= 1.2) return 90;
+  if (budgetRatio >= 1.0) return 80;
+  if (budgetRatio >= 0.8) return 60;
+  if (budgetRatio >= 0.6) return 40;
   return 20;
 };
 
@@ -102,20 +157,34 @@ const calculateTestScoreCompatibility = (university: University, profile: Studen
   let scores = [];
   
   if (profile.ielts && university.ieltsMin) {
-    scores.push(profile.ielts >= university.ieltsMin ? 100 : 50);
-  }
-  
-  if (profile.toefl && university.toeflMin) {
-    scores.push(profile.toefl >= university.toeflMin ? 100 : 50);
-  }
-  
-  if (profile.sat && university.satRange) {
-    if (profile.sat >= university.satRange.avg) scores.push(100);
-    else if (profile.sat >= university.satRange.min) scores.push(70);
+    if (profile.ielts >= university.ieltsMin + 0.5) scores.push(100);
+    else if (profile.ielts >= university.ieltsMin) scores.push(85);
+    else if (profile.ielts >= university.ieltsMin - 0.5) scores.push(60);
     else scores.push(30);
   }
   
-  return scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 80;
+  if (profile.toefl && university.toeflMin) {
+    if (profile.toefl >= university.toeflMin + 10) scores.push(100);
+    else if (profile.toefl >= university.toeflMin) scores.push(85);
+    else if (profile.toefl >= university.toeflMin - 10) scores.push(60);
+    else scores.push(30);
+  }
+  
+  if (profile.sat && university.satRange) {
+    if (profile.sat >= university.satRange.avg + 50) scores.push(100);
+    else if (profile.sat >= university.satRange.avg) scores.push(85);
+    else if (profile.sat >= university.satRange.min) scores.push(70);
+    else scores.push(35);
+  }
+  
+  if (profile.gre && university.greRange) {
+    if (profile.gre >= university.greRange.avg + 20) scores.push(100);
+    else if (profile.gre >= university.greRange.avg) scores.push(85);
+    else if (profile.gre >= university.greRange.min) scores.push(70);
+    else scores.push(35);
+  }
+  
+  return scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 75;
 };
 
 const calculatePreferencesScore = (university: University, profile: StudentProfile): number => {
@@ -123,38 +192,30 @@ const calculatePreferencesScore = (university: University, profile: StudentProfi
   let checks = 0;
   
   // Location preference
-  if (profile.locationPreference !== 'any') {
-    score += university.location === profile.locationPreference ? 100 : 50;
+  if (profile.locationPreference && profile.locationPreference !== 'any') {
+    score += university.location === profile.locationPreference ? 100 : 40;
     checks++;
   }
   
   // University size preference
-  if (profile.universitySize !== 'any') {
-    score += university.campusSize === profile.universitySize ? 100 : 70;
+  if (profile.universitySize && profile.universitySize !== 'any') {
+    score += university.campusSize === profile.universitySize ? 100 : 60;
     checks++;
   }
   
   // Research opportunities
   if (profile.researchOpportunities) {
-    score += university.researchOpportunities ? 100 : 30;
+    score += university.researchOpportunities ? 100 : 20;
     checks++;
   }
   
-  return checks > 0 ? score / checks : 80;
-};
-
-const calculateCareerScore = (university: University, profile: StudentProfile): number => {
-  let score = 0;
-  
-  // Employment rate
-  score += university.employmentRate;
-  
-  // Internship programs
-  if (profile.internshipImportance === 'high' && university.internshipPrograms) {
-    score += 20;
+  // Financial aid need
+  if (profile.financialAidNeeded) {
+    score += university.financialAidAvailable ? 100 : 30;
+    checks++;
   }
   
-  return Math.min(score, 100);
+  return checks > 0 ? score / checks : 75;
 };
 
 const normalizeGPA = (gpa: number, system: string): number => {
@@ -171,13 +232,20 @@ const normalizeGPA = (gpa: number, system: string): number => {
 const getMatchReasons = (university: University, profile: StudentProfile): string[] => {
   const reasons = [];
   
-  const studentGPA = normalizeGPA(profile.gpa, profile.gradeSystem);
+  const studentGPA = normalizeGPA(profile.gpa || 0, profile.gradeSystem);
   if (studentGPA >= university.avgGPA) {
-    reasons.push("Strong academic match");
+    reasons.push("Excellent academic match");
+  } else if (studentGPA >= university.minGPA) {
+    reasons.push("Good academic fit");
   }
   
-  if (profile.annualBudget >= university.tuitionFee.international + university.livingCost.medium) {
-    reasons.push("Within budget");
+  if (profile.annualBudget) {
+    const totalCost = university.tuitionFee.international + university.livingCost.medium;
+    if (profile.annualBudget >= totalCost * 1.2) {
+      reasons.push("Well within budget");
+    } else if (profile.annualBudget >= totalCost) {
+      reasons.push("Fits your budget");
+    }
   }
   
   if (university.financialAidAvailable && profile.financialAidNeeded) {
@@ -185,16 +253,17 @@ const getMatchReasons = (university: University, profile: StudentProfile): strin
   }
   
   if (profile.fieldOfStudy && university.strongDepartments.some(dept => 
-    dept.toLowerCase().includes(profile.fieldOfStudy.toLowerCase())
+    dept.toLowerCase().includes(profile.fieldOfStudy.toLowerCase()) ||
+    profile.fieldOfStudy.toLowerCase().includes(dept.toLowerCase())
   )) {
-    reasons.push("Strong in your field");
+    reasons.push("Strong in your field of study");
   }
   
-  if (university.internationalPercentage > 15) {
+  if (university.internationalPercentage > 20) {
     reasons.push("Diverse international community");
   }
   
-  if (university.employmentRate > 85) {
+  if (university.employmentRate > 90) {
     reasons.push("Excellent employment outcomes");
   }
   
@@ -202,5 +271,9 @@ const getMatchReasons = (university: University, profile: StudentProfile): strin
     reasons.push("Research opportunities available");
   }
   
-  return reasons;
+  if (profile.internshipImportance === 'high' && university.internshipPrograms) {
+    reasons.push("Strong internship programs");
+  }
+  
+  return reasons.slice(0, 4); // Limit to most relevant reasons
 };
